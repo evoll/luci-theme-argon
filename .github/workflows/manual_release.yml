@@ -11,130 +11,218 @@
 #   4.Let's take [Actions]
 #
 
-name: "Auto compile with OpenWrt SDK"
+name: "Build luci-theme-argon (multi-version)"
+
 on:
-  repository_dispatch:
   workflow_dispatch:
-    inputs:
-      ssh:
-        description: "SSH connection to Actions"
-        required: false
-        default: "false"
   push:
-    branches:
-      - "master"
+    branches: ["master"]
     paths:
       - "luci-theme-argon/Makefile"
+
 env:
   TZ: Asia/Shanghai
 
 jobs:
+
+  # ────────────────────────────────────────────────────────
+  # 1. Проверка: нужна ли сборка (новая версия в Makefile?)
+  # ────────────────────────────────────────────────────────
   job_check:
-    if: github.repository == ${{ github.repository }}
     name: Check Version
     runs-on: ubuntu-latest
+    if: github.repository == 'jerrykuku/luci-theme-argon'
     outputs:
       argon_version: ${{ steps.check_version.outputs.latest_version }}
-      has_update: ${{ steps.check_version.outputs.has_update }}
+      has_update:    ${{ steps.check_version.outputs.has_update }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@main
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: "master"
+          ref: master
 
       - name: Check version
         id: check_version
         env:
           url_release: https://api.github.com/repos/${{ github.repository }}/releases/latest
         run: |
-          latest_version=$(grep -oP 'PKG_VERSION:=\K.*' Makefile | sed 's/^/v/')
-          latest_release=$(wget -qO- -t1 -T2 ${{env.url_release}} | awk -F '"' '/tag_name/{print $4}')
+          latest_version=$(grep -oP 'PKG_VERSION:=\K.*' luci-theme-argon/Makefile | sed 's/^/v/')
+          latest_release=$(wget -qO- -t1 -T2 ${{ env.url_release }} | awk -F'"' '/tag_name/{print $4}')
           has_update=$([ "${latest_version}" != "${latest_release}" ] && echo true || echo false)
           echo "latest_version=${latest_version}" >> $GITHUB_OUTPUT
-          echo "has_update=${has_update}" >> $GITHUB_OUTPUT
-          echo "latest_version: ${latest_version}"
-          echo "latest_release: ${latest_release}"
-          echo "has_update: ${has_update}"
+          echo "has_update=${has_update}"         >> $GITHUB_OUTPUT
+          echo "=== Version check ==="
+          echo "  In Makefile : ${latest_version}"
+          echo "  Last release: ${latest_release}"
+          echo "  Needs build : ${has_update}"
 
-      - name: Generate new tag & release
+      - name: Create release tag
         if: steps.check_version.outputs.has_update == 'true'
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: For openwrt official Snapshots LuCI master
-          tag_name: ${{steps.check_version.outputs.latest_version}}
+          tag_name: ${{ steps.check_version.outputs.latest_version }}
+          name: luci-theme-argon ${{ steps.check_version.outputs.latest_version }}
+          body: |
+            Автоматическая сборка для нескольких версий OpenWrt.
+            Выберите нужный файл пакета:
 
-  job_build_argon:
-    name: Build Argon (master)
+            | Файл | Версия OpenWrt | Менеджер пакетов |
+            |------|---------------|-----------------|
+            | `*23.05*` | OpenWrt 23.05.6 | opkg / `.ipk` |
+            | `*24.10*` | OpenWrt 24.10.5 | opkg / `.ipk` |
+            | `*25.12*` | OpenWrt 25.12.0 | apk / `.apk` |
+            | `*snapshot*` | OpenWrt snapshot | apk / `.apk` |
+
+  # ────────────────────────────────────────────────────────
+  # 2. Matrix-сборка под 4 версии OpenWrt
+  # ────────────────────────────────────────────────────────
+  job_build:
+    name: Build for OpenWrt ${{ matrix.openwrt_version }}
     needs: job_check
     if: needs.job_check.outputs.has_update == 'true'
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+
+          # ── 23.05.6 ── стабильная, opkg/ipk ──────────
+          - openwrt_version: "23.05"
+            sdk_url: "https://archive.openwrt.org/releases/23.05.6/targets/x86/64/openwrt-sdk-23.05.6-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+            sdk_archive_format: "xz"
+            cache_key: "sdk-23.05.6-x86-64"
+            pkg_ext: "ipk"
+            feeds_base:     "https://github.com/openwrt/openwrt.git;openwrt-23.05"
+            feeds_packages: "https://github.com/openwrt/packages.git;openwrt-23.05"
+            feeds_luci:     "https://github.com/openwrt/luci.git;openwrt-23.05"
+
+          # ── 24.10.5 ── стабильная, opkg/ipk ──────────
+          - openwrt_version: "24.10"
+            sdk_url: "https://archive.openwrt.org/releases/24.10.5/targets/x86/64/openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+            sdk_archive_format: "zst"
+            cache_key: "sdk-24.10.5-x86-64"
+            pkg_ext: "ipk"
+            feeds_base:     "https://github.com/openwrt/openwrt.git;openwrt-24.10"
+            feeds_packages: "https://github.com/openwrt/packages.git;openwrt-24.10"
+            feeds_luci:     "https://github.com/openwrt/luci.git;openwrt-24.10"
+
+          # ── 25.12.0 ── стабильная, apk ────────────────
+          # ВАЖНО: уточни точное имя файла SDK на:
+          # https://downloads.openwrt.org/releases/25.12.0/targets/x86/64/
+          - openwrt_version: "25.12"
+            sdk_url: "https://downloads.openwrt.org/releases/25.12.0/targets/x86/64/openwrt-sdk-25.12.0-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+            sdk_archive_format: "zst"
+            cache_key: "sdk-25.12.0-x86-64"
+            pkg_ext: "apk"
+            feeds_base:     "https://github.com/openwrt/openwrt.git;openwrt-25.12"
+            feeds_packages: "https://github.com/openwrt/packages.git;openwrt-25.12"
+            feeds_luci:     "https://github.com/openwrt/luci.git;openwrt-25.12"
+
+          # ── snapshot ── нестабильная, apk, без кэша ───
+          - openwrt_version: "snapshot"
+            sdk_url: "https://downloads.openwrt.org/snapshots/targets/x86/64/openwrt-sdk-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+            sdk_archive_format: "zst"
+            cache_key: ""           # намеренно пусто — SDK всегда свежий
+            pkg_ext: "apk"
+            feeds_base:     "https://github.com/openwrt/openwrt.git;main"
+            feeds_packages: "https://github.com/openwrt/packages.git;master"
+            feeds_luci:     "https://github.com/openwrt/luci.git;master"
+
     steps:
-      - name: Install packages
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Install build dependencies
         run: |
-          echo "Install packages"
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install zstd build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-venv rsync unzip zlib1g-dev file wget
+          sudo -E apt-get -qq install \
+            zstd build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git \
+            libncurses5-dev libssl-dev python3-venv \
+            rsync unzip zlib1g-dev file wget
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
 
-      - name: Cache openwrt SDK
+      # Кэш только для стабильных версий (cache_key непустой)
+      - name: Cache OpenWrt SDK (${{ matrix.openwrt_version }})
         id: cache-sdk
-        uses: actions/cache@v3
+        if: matrix.cache_key != ''
+        uses: actions/cache@v4
         with:
           path: sdk
-          key: openwrt-sdk-snapshot-x86-64
+          key: ${{ matrix.cache_key }}
 
-      - name: Initialization environment
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        env:
-          url_sdk: https://archive.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+      - name: Download and unpack SDK
+        if: matrix.cache_key == '' || steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          wget ${{ env.url_sdk }}
-          file_name=$(echo ${{env.url_sdk}} | awk -F/ '{print $NF}')
-          mkdir sdk && tar --zstd -xvf $file_name -C ./sdk --strip-components=1
-          cd sdk  
-          echo "src-git base https://github.com/openwrt/openwrt.git;main" > feeds.conf
-          echo "src-git-full packages https://github.com/openwrt/packages.git;master" >> feeds.conf
-          echo "src-git-full luci https://github.com/openwrt/luci.git;master" >> feeds.conf
-          echo "src-git-full routing https://git.openwrt.org/feed/routing.git;master"  >> feeds.conf
-          git clone -b master https://github.com/${{ github.repository }}.git package/downloads/luci-theme-argon
+          wget -q "${{ matrix.sdk_url }}"
+          archive=$(basename "${{ matrix.sdk_url }}")
+          mkdir -p sdk
+
+          if [ "${{ matrix.sdk_archive_format }}" = "zst" ]; then
+            tar --zstd -xf "${archive}" -C ./sdk --strip-components=1
+          else
+            tar -xf "${archive}" -C ./sdk --strip-components=1
+          fi
+
+      - name: Setup feeds and download sources
+        if: matrix.cache_key == '' || steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          cd sdk
+          cat > feeds.conf << EOF
+          src-git base     ${{ matrix.feeds_base }}
+          src-git packages ${{ matrix.feeds_packages }}
+          src-git luci     ${{ matrix.feeds_luci }}
+          EOF
+
+          git clone -b master \
+            https://github.com/${{ github.repository }}.git \
+            package/downloads/luci-theme-argon
+
           ./scripts/feeds update -a
           echo "CONFIG_PACKAGE_luci-theme-argon=m" > .config
           ./scripts/feeds install -d n luci-theme-argon
           make download -j8
 
-      - name: Configure Argon (master)
+      - name: Configure build
         run: |
           cd sdk
           ./scripts/feeds install luci-theme-argon
-          echo "CONFIG_ALL_NONSHARED=n" > .config
-          echo "CONFIG_ALL_KMODS=n" >> .config
-          echo "CONFIG_ALL=n" >> .config
-          echo "CONFIG_AUTOREMOVE=n" >> .config
-          echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
-          echo "CONFIG_PACKAGE_luci-theme-argon=m" >> .config
+          cat > .config << 'EOF'
+          CONFIG_ALL_NONSHARED=n
+          CONFIG_ALL_KMODS=n
+          CONFIG_ALL=n
+          CONFIG_AUTOREMOVE=n
+          CONFIG_LUCI_LANG_zh_Hans=y
+          CONFIG_PACKAGE_luci-theme-argon=m
+          EOF
           make defconfig
 
-      - name: Compile Argon (master)
+      - name: Compile luci-theme-argon
         id: compile
         run: |
           cd sdk
-          echo "make package/luci-theme-argon/{clean,compile} -j$(nproc)"
-          make package/luci-theme-argon/{clean,compile} -j$(nproc)
-          mv bin/packages/x86_64/base/ ../
-          rm .config .config.old
-          cd ..
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          make package/luci-theme-argon/{clean,compile} -j$(nproc) V=s 2>&1 | \
+            grep -E "^(make|ERROR|WARNING)" || true
 
-      - name: Upload Argon (master) ipks to release
-        uses: softprops/action-gh-release@v1
+          mkdir -p ../output
+          for pkg in bin/packages/x86_64/base/luci-theme*.${{ matrix.pkg_ext }}; do
+            [ -f "${pkg}" ] || continue
+            base=$(basename "${pkg}" .${{ matrix.pkg_ext }})
+            cp "${pkg}" "../output/${base}-openwrt${{ matrix.openwrt_version }}.${{ matrix.pkg_ext }}"
+          done
+
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Upload packages to release
         if: steps.compile.outputs.status == 'success'
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{needs.job_check.outputs.argon_version}}
-          files: ${{ env.FIRMWARE }}/base/luci-theme*.*
+          tag_name: ${{ needs.job_check.outputs.argon_version }}
+          files: output/*.${{ matrix.pkg_ext }}
