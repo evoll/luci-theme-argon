@@ -123,7 +123,7 @@ jobs:
 
           # ── snapshot ── нестабильная, apk, без кэша ───
           - openwrt_version: "snapshot"
-            sdk_url: "https://downloads.openwrt.org/snapshots/targets/x86/64/openwrt-sdk-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+            sdk_url: "https://downloads.openwrt.org/snapshots/targets/x86/64/openwrt-sdk-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
             sdk_archive_format: "zst"
             cache_key: ""           # намеренно пусто — SDK всегда свежий
             pkg_ext: "apk"
