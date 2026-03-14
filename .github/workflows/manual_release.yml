@@ -31,7 +31,7 @@ jobs:
   job_check:
     name: Check Version
     runs-on: ubuntu-latest
-    if: github.repository == 'jerrykuku/luci-theme-argon'
+    if: github.repository == 'evoll/luci-theme-argon'
     outputs:
       argon_version: ${{ steps.check_version.outputs.latest_version }}
       has_update:    ${{ steps.check_version.outputs.has_update }}
